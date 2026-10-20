@@ -126,47 +126,59 @@ async function createCategoryCommandsMenu(category, client) {
 
     const categoryCommands = [];
 
-    try {
-        const categoryPath = path.join(__dirname, "../../commands", category);
-        const commandFiles = (await fs.readdir(categoryPath))
-            .filter((file) => file.endsWith(".js"))
-            .sort();
-
-        for (const file of commandFiles) {
-            const filePath = path.join(categoryPath, file);
-            const commandModule = await import(`file://${filePath}`);
-            const command = commandModule.default;
-            const commandData = normalizeCommandData(command);
-
-            if (commandData) {
-                if (
-                    commandData.name === "help" ||
-                    commandData.name === "commandlist"
-                )
-                    continue;
-
-                categoryCommands.push(...buildHelpEntries(command, categoryName));
+    if (client?.commands?.size > 0) {
+        for (const command of client.commands.values()) {
+            const cmdCat = command.category || '';
+            if (
+                cmdCat.toLowerCase() === category.toLowerCase() ||
+                formatCategoryName(cmdCat).toLowerCase() === categoryName.toLowerCase()
+            ) {
+                const commandData = normalizeCommandData(command);
+                if (commandData && commandData.name !== 'help' && commandData.name !== 'commandlist') {
+                    categoryCommands.push(...buildHelpEntries(command, categoryName));
+                }
             }
         }
-    } catch (error) {
-        logger.error(
-            `Error reading commands from category ${category}:`,
-            error,
-        );
+    } else {
+        try {
+            const categoryPath = path.join(__dirname, "../../commands", category);
+            const commandFiles = (await fs.readdir(categoryPath))
+                .filter((file) => file.endsWith(".js"))
+                .sort();
+
+            for (const file of commandFiles) {
+                const filePath = path.join(categoryPath, file);
+                const commandModule = await import(`file://${filePath}`);
+                const command = commandModule.default;
+                const commandData = normalizeCommandData(command);
+
+                if (commandData) {
+                    if (
+                        commandData.name === "help" ||
+                        commandData.name === "commandlist"
+                    )
+                        continue;
+
+                    categoryCommands.push(...buildHelpEntries(command, categoryName));
+                }
+            }
+        } catch (error) {
+            logger.error(
+                `Error reading commands from category ${category}:`,
+                error,
+            );
+        }
     }
 
     categoryCommands.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-    let registeredCommands = new Collection();
-    try {
-        if (client?.application?.commands?.fetch) {
-            const commands = await client.application.commands.fetch();
-            for (const cmd of commands.values()) {
-                registeredCommands.set(cmd.name, cmd);
-            }
+    let registeredCommands = client?.application?.commands?.cache || new Collection();
+    if (registeredCommands.size === 0 && client?.application?.commands?.fetch) {
+        try {
+            registeredCommands = await client.application.commands.fetch();
+        } catch (error) {
+            logger.error('Error fetching registered commands:', error);
         }
-    } catch (error) {
-        logger.error('Error fetching registered commands:', error);
     }
 
     const embed = createEmbed({
@@ -242,63 +254,70 @@ export async function createAllCommandsMenu(page = 1, client) {
     const commandsPerPage = 45;
     const allCommands = [];
 
-    const commandsPath = path.join(__dirname, "../../commands");
-    const categoryDirs = (
-        await fs.readdir(commandsPath, { withFileTypes: true })
-    )
-        .filter((dirent) => dirent.isDirectory())
-        .map((dirent) => dirent.name)
-        .sort();
-
-    for (const category of categoryDirs) {
-        try {
-            const categoryPath = path.join(
-                __dirname,
-                "../../commands",
-                category,
-            );
-            const commandFiles = (await fs.readdir(categoryPath))
-                .filter((file) => file.endsWith(".js"))
-                .sort();
-
-            for (const file of commandFiles) {
-                const filePath = path.join(categoryPath, file);
-                const commandModule = await import(`file://${filePath}`);
-                const command = commandModule.default;
-                const commandData = normalizeCommandData(command);
-
-                if (commandData) {
-                    if (
-                        commandData.name === "help" ||
-                        commandData.name === "commandlist"
-                    )
-                        continue;
-
-                    const categoryName = formatCategoryName(category);
-
-                    allCommands.push(...buildHelpEntries(command, categoryName));
-                }
+    if (client?.commands?.size > 0) {
+        for (const command of client.commands.values()) {
+            const commandData = normalizeCommandData(command);
+            if (commandData && commandData.name !== "help" && commandData.name !== "commandlist") {
+                const categoryName = formatCategoryName(command.category || "General");
+                allCommands.push(...buildHelpEntries(command, categoryName));
             }
-        } catch (error) {
-            logger.error(
-                `Error reading commands from category ${category}:`,
-                error,
-            );
+        }
+    } else {
+        const commandsPath = path.join(__dirname, "../../commands");
+        const categoryDirs = (
+            await fs.readdir(commandsPath, { withFileTypes: true })
+        )
+            .filter((dirent) => dirent.isDirectory())
+            .map((dirent) => dirent.name)
+            .sort();
+
+        for (const category of categoryDirs) {
+            try {
+                const categoryPath = path.join(
+                    __dirname,
+                    "../../commands",
+                    category,
+                );
+                const commandFiles = (await fs.readdir(categoryPath))
+                    .filter((file) => file.endsWith(".js"))
+                    .sort();
+
+                for (const file of commandFiles) {
+                    const filePath = path.join(categoryPath, file);
+                    const commandModule = await import(`file://${filePath}`);
+                    const command = commandModule.default;
+                    const commandData = normalizeCommandData(command);
+
+                    if (commandData) {
+                        if (
+                            commandData.name === "help" ||
+                            commandData.name === "commandlist"
+                        )
+                            continue;
+
+                        const categoryName = formatCategoryName(category);
+
+                        allCommands.push(...buildHelpEntries(command, categoryName));
+                    }
+                }
+            } catch (error) {
+                logger.error(
+                    `Error reading commands from category ${category}:`,
+                    error,
+                );
+            }
         }
     }
 
     allCommands.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-    let registeredCommands = new Collection();
-    try {
-        if (client?.application?.commands?.fetch) {
-            const commands = await client.application.commands.fetch();
-            for (const cmd of commands.values()) {
-                registeredCommands.set(cmd.name, cmd);
-            }
+    let registeredCommands = client?.application?.commands?.cache || new Collection();
+    if (registeredCommands.size === 0 && client?.application?.commands?.fetch) {
+        try {
+            registeredCommands = await client.application.commands.fetch();
+        } catch (error) {
+            logger.error('Error fetching registered commands:', error);
         }
-    } catch (error) {
-        logger.error('Error fetching registered commands:', error);
     }
 
     const totalPages = Math.ceil(allCommands.length / commandsPerPage);

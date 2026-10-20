@@ -155,6 +155,7 @@ const enforceLogSchema = format((info) => {
 });
 
 const logger = createLogger({
+  exitOnError: false,
   level: resolvedLogLevel,
   format: combine(
     attachTraceContext(),

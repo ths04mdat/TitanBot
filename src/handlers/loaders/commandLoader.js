@@ -269,6 +269,16 @@ export async function registerCommands(client, options = {}) {
     try {
         const { commands, totalSubcommands } = collectCommandPayloads(client);
         await registerGlobalCommands(client, clientId, commands, totalSubcommands);
+
+        const guildId = process.env.GUILD_ID;
+        if (guildId && client.rest) {
+            try {
+                // Ensure no leftover guild commands to prevent duplicates with global commands
+                await client.rest.put(`/applications/${clientId}/guilds/${guildId}/commands`, { body: [] });
+            } catch (guildError) {
+                logger.debug(`Could not clear guild commands for ${guildId}:`, guildError.message);
+            }
+        }
     } catch (error) {
         logger.error('Error registering commands:', error);
         throw error;

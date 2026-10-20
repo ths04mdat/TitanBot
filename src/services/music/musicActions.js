@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { MessageFlags, PermissionFlagsBits } from 'discord.js';
-import { successEmbed } from '../../utils/embeds.js';
+import { createEmbed, successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { botHasPermission } from '../../utils/permissionGuard.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
@@ -11,10 +11,10 @@ import {
     buildQueueEmbed,
     buildQueuePaginationRow,
     getQueuePageSize,
+    formatDuration,
 } from './musicEmbeds.js';
 import { refreshPlayerMessage } from './playerHandler.js';
-
-const YOUTUBE_URL_PATTERN = /(?:youtube\.com|youtu\.be)/i;
+import { logger } from '../../utils/logger.js';
 const PLAYER_CONNECT_TIMEOUT_MS = 12_000;
 
 function getConnectedLavalinkNodes(client) {
@@ -195,27 +195,47 @@ export async function joinVoiceChannel(client, interaction) {
     );
 }
 
-export async function playQuery(client, interaction, query) {
-    if (YOUTUBE_URL_PATTERN.test(query)) {
+export async function playQuery(client, interaction, query, options = {}) {
+    if (!query || typeof query !== 'string' || !query.trim()) {
         throw new TitanBotError(
-            'YouTube URL blocked',
+            'Missing query',
             ErrorTypes.USER_INPUT,
-            'YouTube links are not supported. Try a song name instead.',
+            'Please provide a song name, track URL, or playlist link.',
         );
     }
 
+    const trimmedQuery = query.trim();
     const { player, guildData } = await ensurePlayer(client, interaction);
 
-    const result = await client.riffy.resolve({
-        query,
-        requester: interaction.user,
-    });
+    let result;
+    try {
+        result = await client.riffy.resolve({
+            query: trimmedQuery,
+            requester: interaction.user,
+        });
+    } catch (resolveError) {
+        logger.warn(`Lavalink resolve error for query "${trimmedQuery}":`, resolveError?.message || resolveError);
+        throw new TitanBotError(
+            'Audio resolve failed',
+            ErrorTypes.NETWORK,
+            `Could not resolve audio source: ${resolveError?.message || 'Network error'}.`,
+        );
+    }
+
+    if (!result) {
+        throw new TitanBotError('No results', ErrorTypes.USER_INPUT, 'No results found for that query.');
+    }
 
     const { loadType, tracks, playlistInfo } = result;
 
     if (loadType === 'playlist' || loadType === 'PLAYLIST_LOADED') {
+        if (!tracks || tracks.length === 0) {
+            throw new TitanBotError('Empty playlist', ErrorTypes.USER_INPUT, 'This playlist contains no playable tracks.');
+        }
+
         let added = 0;
         let skipped = 0;
+        const willPlayNow = !player.playing && !player.paused;
 
         for (const track of tracks) {
             track.info.requester = interaction.user;
@@ -227,16 +247,36 @@ export async function playQuery(client, interaction, query) {
             added += 1;
         }
 
-        if (!player.playing && !player.paused) {
+        if (options.shuffle && player.queue.length > 1) {
+            player.queue.shuffle();
+        }
+
+        if (willPlayNow && player.queue.length > 0) {
             await startPlayback(player);
         }
 
-        return {
-            embed: successEmbed(
-                'Playlist Added',
-                `**${playlistInfo?.name || 'Playlist'}**\nAdded ${added} of ${tracks.length} track(s).${skipped ? ` Skipped ${skipped} duplicate(s).` : ''}`,
-            ),
-        };
+        const playlistName = playlistInfo?.name || 'Playlist';
+        const totalDurationMs = tracks.reduce((acc, t) => acc + (t.info?.length || 0), 0);
+        const durationFormatted = formatDuration(totalDurationMs);
+        const firstTrack = tracks[0];
+
+        const embed = createEmbed({
+            title: '🎶 Playlist Added to Queue',
+            description: (trimmedQuery.startsWith('http://') || trimmedQuery.startsWith('https://'))
+                ? `[**${playlistName}**](${trimmedQuery})`
+                : `**${playlistName}**`,
+            color: 'primary',
+            fields: [
+                { name: 'Tracks Added', value: `${added} of ${tracks.length}` + (skipped > 0 ? ` (${skipped} duplicates skipped)` : ''), inline: true },
+                { name: 'Total Duration', value: durationFormatted, inline: true },
+                { name: 'Playback Status', value: willPlayNow ? '▶️ Playing first track now' : `Queued at position #${Math.max(1, player.queue.length - added + 1)}`, inline: true },
+                { name: 'Mode', value: options.shuffle ? '🔀 Shuffled' : 'Sequential', inline: true },
+                { name: 'Requester', value: `<@${interaction.user.id}>`, inline: true },
+            ],
+            thumbnail: firstTrack?.info?.thumbnail || firstTrack?.info?.artworkUrl || null,
+        });
+
+        return { embed };
     }
 
     if (
@@ -268,17 +308,29 @@ export async function playQuery(client, interaction, query) {
             await startPlayback(player);
         }
 
-        return {
-            embed: successEmbed(
-                willPlayNow ? 'Now Playing' : 'Track Added',
-                willPlayNow
-                    ? `**${track.info.title}**\n${track.info.author}`
-                    : `**${track.info.title}**\n${track.info.author}\nPosition: #${queuePosition} in queue`,
-            ),
-        };
+        const durationFormatted = formatDuration(track.info.length);
+        const trackUrl = track.info.uri || '';
+
+        const embed = createEmbed({
+            title: willPlayNow ? '▶️ Now Playing' : '🎵 Track Added to Queue',
+            description: trackUrl ? `[**${track.info.title}**](${trackUrl})\nBy **${track.info.author}**` : `**${track.info.title}**\nBy **${track.info.author}**`,
+            color: 'primary',
+            fields: [
+                { name: 'Duration', value: durationFormatted, inline: true },
+                { name: 'Position', value: willPlayNow ? 'Now Playing' : `#${queuePosition} in queue`, inline: true },
+                { name: 'Requester', value: `<@${interaction.user.id}>`, inline: true },
+            ],
+            thumbnail: track.info.thumbnail || track.info.artworkUrl || null,
+        });
+
+        return { embed };
     }
 
-    throw new TitanBotError('No results', ErrorTypes.USER_INPUT, `No results found. (loadType: ${loadType})`);
+    if (loadType === 'empty' || loadType === 'NO_MATCHES') {
+        throw new TitanBotError('No results', ErrorTypes.USER_INPUT, 'No matching tracks or playlist found. Check your URL or try a song title.');
+    }
+
+    throw new TitanBotError('No results', ErrorTypes.USER_INPUT, `Could not load audio. (loadType: ${loadType})`);
 }
 
 export async function skipTrack(client, interaction) {

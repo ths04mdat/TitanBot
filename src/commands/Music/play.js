@@ -3,13 +3,21 @@ import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { playQuery, replyMusicSuccess } from '../../services/music/musicActions.js';
 
 export default {
-    slashOnly: true,
     category: 'Music',
     data: new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Play a song or add it to the queue')
+        .setDescription('Play a song, direct link, or playlist (YouTube/Spotify/SoundCloud)')
         .addStringOption((opt) =>
-            opt.setName('query').setDescription('Song name or URL').setRequired(true),
+            opt
+                .setName('query')
+                .setDescription('Song name, track URL, or playlist link')
+                .setRequired(true),
+        )
+        .addBooleanOption((opt) =>
+            opt
+                .setName('shuffle')
+                .setDescription('Shuffle tracks if loading a playlist? (Default: false)')
+                .setRequired(false),
         ),
 
     async execute(interaction, config, client) {
@@ -18,7 +26,10 @@ export default {
             return;
         }
 
-        const result = await playQuery(client, interaction, interaction.options.getString('query'));
+        const query = interaction.options.getString('query');
+        const shuffle = interaction.options.getBoolean('shuffle') ?? false;
+
+        const result = await playQuery(client, interaction, query, { shuffle });
         await replyMusicSuccess(interaction, result.embed);
     },
 };

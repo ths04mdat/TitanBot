@@ -307,6 +307,7 @@ export default {
             }
           }
         } else if (interaction.isButton()) {
+          logger.info(`Button interaction: ${interaction.customId} by ${interaction.user.tag}`);
           if (interaction.customId.startsWith('shared_todo_')) {
             const parts = interaction.customId.split('_');
             const buttonType = parts.slice(0, 3).join('_');
@@ -360,6 +361,7 @@ export default {
             }, interactionTraceContext));
           }
         } else if (interaction.isStringSelectMenu()) {
+          logger.info(`SelectMenu interaction: ${interaction.customId} (value: ${interaction.values?.join(',')}) by ${interaction.user.tag}`);
           const [customId, ...args] = interaction.customId.split(':');
           const selectMenu = client.selectMenus.get(customId);
 

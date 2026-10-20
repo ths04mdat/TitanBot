@@ -1,4 +1,4 @@
-﻿import 'dotenv/config';
+import 'dotenv/config';
 import { Client, Collection, GatewayIntentBits } from 'discord.js';
 import { REST } from '@discordjs/rest';
 import express from 'express';
@@ -395,6 +395,17 @@ try {
     process.on('SIGINT', () => bot.shutdown('SIGINT'));
     
     process.on('uncaughtException', (error) => {
+      const msg = error?.message || String(error);
+      if (
+        msg.includes('Opening handshake has timed out') ||
+        msg.includes('WebSocket') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('Connection terminated')
+      ) {
+        logger.warn(`Recoverable network uncaughtException ignored: ${msg}`);
+        return;
+      }
       // Process state may be corrupt after an uncaught throw; log and shut down cleanly.
       handleTaskError('uncaught_exception', error, { fatal: true });
       bot.shutdown('UNCAUGHT_EXCEPTION');
@@ -406,7 +417,12 @@ try {
         logger.warn('Recoverable Discord interaction rejection:', reason?.message || reason);
         return;
       }
-      if (reason?.message?.includes('Queue is empty')) {
+      if (
+        reason?.message?.includes('Queue is empty') ||
+        reason?.message?.includes('Making Node Request') ||
+        reason?.message?.includes('Connection terminated')
+      ) {
+        logger.warn('Recoverable background network rejection:', reason?.message || reason);
         return;
       }
 
